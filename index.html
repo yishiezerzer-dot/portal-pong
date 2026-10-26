@@ -24,6 +24,11 @@ small{opacity:.7;font-size:13px;max-width:420px}
 .pw{position:fixed;left:calc(8px + env(safe-area-inset-left));display:flex;gap:6px;z-index:4;pointer-events:none;flex-wrap:wrap;max-width:70vw}
 #pwA{top:calc(8px + env(safe-area-inset-top))}#pwP{bottom:calc(8px + env(safe-area-inset-bottom))}
 .chip{font:700 14px system-ui;padding:5px 9px;border-radius:10px;background:#0b1a33dd;border:2px solid var(--c);color:#fff;box-shadow:0 0 10px var(--c)}
+.code{font:800 46px ui-monospace,monospace;letter-spacing:8px;color:#fff;text-shadow:0 0 14px #39b8ff}
+input.t{font:700 22px ui-monospace,monospace;padding:12px;border-radius:12px;border:2px solid #39b8ff;background:#0b1a33;color:#fff;text-align:center;width:160px;text-transform:uppercase;letter-spacing:4px}
+#roomLink{width:min(340px,86vw);font-size:13px;letter-spacing:0;text-transform:none}
+#onStatus{min-height:1.4em}#onStatus.err{color:#ff6b6b}
+#nst{position:fixed;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:4;font:700 13px system-ui;padding:6px 10px;border-radius:10px;background:#0b1a33cc;border:1px solid #ffffff33;pointer-events:none}
 </style></head><body>
 <canvas id="c"></canvas>
 <div id="hud" class="hide"><button id="bPause" aria-label="Pause">⏸</button><button id="bMute" aria-label="Mute">🔊</button></div>
@@ -35,7 +40,24 @@ small{opacity:.7;font-size:13px;max-width:420px}
  <div class="row" id="mode"><button class="btn sel" data-m="0">Classic</button><button class="btn" data-m="1">⚡ Power Mode</button></div>
  <small id="modeInfo">Pure Portal Pong.</small>
  <button class="btn" id="bStart">▶ Play</button>
+ <button class="btn o" id="bOnline">🌐 Play online</button>
 </div>
+<div id="online" class="ov hide">
+ <h1 style="font-size:clamp(34px,9vw,56px)">PLAY ONLINE</h1>
+ <div id="onChoose" style="display:flex;flex-direction:column;gap:12px;align-items:center">
+  <button class="btn" id="bCreate">＋ Create room</button>
+  <div class="row"><input class="t" id="joinCode" maxlength="5" placeholder="CODE" autocomplete="off" autocapitalize="characters"><button class="btn" id="bJoin">Join</button></div>
+ </div>
+ <div id="onRoom" class="hide" style="display:flex;flex-direction:column;gap:10px;align-items:center">
+  <small>Room code</small><div class="code" id="roomCode">…</div>
+  <input class="t" id="roomLink" readonly><button class="btn" id="bCopy">🔗 Copy / share link</button>
+  <div class="row" id="omode"><button class="btn sel" data-m="0">Classic</button><button class="btn" data-m="1">⚡ Power Mode</button></div>
+ </div>
+ <p id="onStatus"></p>
+ <button class="btn o" id="bOnBack">Back</button>
+</div>
+<div id="dc" class="ov hide"><h1 style="font-size:clamp(30px,9vw,52px)">DISCONNECTED</h1><p id="dcMsg"></p><button class="btn" id="bDcMenu">Menu</button></div>
+<div id="nst" class="hide"></div>
 <div id="pause" class="ov hide"><h1>PAUSED</h1><button class="btn" id="bResume">▶ Resume</button><button class="btn o" id="bQuit">Menu</button></div>
 <div id="win" class="ov hide"><h1 id="winT">YOU WIN</h1><p id="winS"></p><button class="btn" id="bAgain">↻ Play again</button><button class="btn o" id="bMenu">Menu</button></div>
 <script>
@@ -66,6 +88,8 @@ const S={state:'menu',diff:1,power:false,ps:0,as:0,muted:false,teleports:0,
  balls:[],parts:[],rings:[],swirls:[],orbs:[],pw:{p:{},a:{}},orbT:5,
  shake:0,hitstop:0,flash:0,combo:0,announce:null,hadInput:false,lastScorer:null,log:[]};
 window.__pp=S;
+const NET={role:null,peer:null,conn:null,open:false,code:null,ev:[],snaps:[],rm:{me:false,them:false},last:0,lastSend:0,lastIn:0,inDirty:false,rtt:0,status:''};S.net=NET;
+const me=()=>NET.role==='guest'?'a':'p';
 Object.defineProperty(S,'ball',{get:()=>S.balls[0]});
 function resize(){dpr=Math.min(window.devicePixelRatio||1,3);const w=innerWidth,h=innerHeight;cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);
  sc=Math.min(w/(W+20),h/(H+20));ox=(w-W*sc)/2;oy=(h-H*sc)/2;}
@@ -73,7 +97,9 @@ addEventListener('resize',resize);resize();
 let ac=null;function blip(f,d=.07,type='square',v=.06,f2){if(S.muted)return;try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
  const o=ac.createOscillator(),g=ac.createGain();o.type=type;o.frequency.value=f;if(f2)o.frequency.exponentialRampToValueAtTime(f2,ac.currentTime+d);g.gain.value=v;g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+d);o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+d);}catch(e){}}
 // ---- input (unchanged): x -> paddle, y -> portal
-function onPoint(clientX,clientY){const fx=(clientX-ox)/sc,fy=(clientY-oy)/sc;S.hadInput=true;
+function onPoint(clientX,clientY){let fx=(clientX-ox)/sc,fy=(clientY-oy)/sc;S.hadInput=true;
+ if(NET.role==='guest'){fx=W-fx;fy=H-fy;// guest view is rotated 180deg: map back to host coords
+  S.ai.tx=Math.max(PW/2,Math.min(W-PW/2,fx));S.aPortal.ty=PMIN+(PMAX-PMIN)*Math.max(0,Math.min(1,fy/H));NET.inDirty=true;return}
  S.player.tx=Math.max(PW/2,Math.min(W-PW/2,fx));
  S.pPortal.ty=PMIN+(PMAX-PMIN)*Math.max(0,Math.min(1,fy/H));}
 S.point=onPoint;
@@ -83,24 +109,25 @@ const tch=e=>{if(S.state==='play'){e.preventDefault();const t=e.touches[0];if(t)
 cv.addEventListener('touchstart',tch,{passive:false});cv.addEventListener('touchmove',tch,{passive:false});
 document.addEventListener('touchmove',e=>{if(S.state==='play')e.preventDefault()},{passive:false});
 document.addEventListener('gesturestart',e=>e.preventDefault());
-addEventListener('keydown',e=>{if(e.key==='p'||e.key==='Escape'){S.state==='play'?pause():S.state==='paused'&&resume();}});
+addEventListener('keydown',e=>{if(!NET.role&&(e.key==='p'||e.key==='Escape')){S.state==='play'?pause():S.state==='paused'&&resume();}});
 // ---- UI
 document.querySelectorAll('#diff .btn').forEach(b=>b.onclick=()=>{S.diff=+b.dataset.d;document.querySelectorAll('#diff .btn').forEach(x=>x.classList.toggle('sel',x===b));blip(500)});
-document.querySelectorAll('#mode .btn').forEach(b=>b.onclick=()=>{S.power=b.dataset.m==='1';document.querySelectorAll('#mode .btn').forEach(x=>x.classList.toggle('sel',x===b));
+document.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{if(NET.role==='guest')return;S.power=b.dataset.m==='1';document.querySelectorAll('[data-m]').forEach(x=>x.classList.toggle('sel',x.dataset.m===b.dataset.m));
  $('modeInfo').textContent=S.power?'Orbs spawn in the field — whoever last hit the ball that touches an orb gets its power.':'Pure Portal Pong.';blip(560)});
-const show=id=>['menu','pause','win'].forEach(k=>$(k).classList.toggle('hide',k!==id));
+const show=id=>['menu','pause','win','online','dc'].forEach(k=>$(k).classList.toggle('hide',k!==id));
 function start(){S.ps=S.as=0;S.teleports=0;S.player.x=S.player.tx=W/2;S.ai.x=W/2;S.pPortal.y=S.pPortal.ty=H/2;S.aPortal.y=S.aPortal.ty=H/2;
- S.parts=[];S.rings=[];S.swirls=[];S.orbs=[];S.pw={p:{},a:{}};S.orbT=4;S.combo=0;S.announce=null;serve(Math.random()<.5?1:-1);S.state='play';show(null);$('hud').classList.remove('hide');blip(660,.12);}
+ S.parts=[];S.rings=[];S.swirls=[];S.orbs=[];S.pw={p:{},a:{}};S.orbT=4;S.combo=0;S.announce=null;S.shake=0;S.hitstop=0;S.ai.tx=W/2;serve(Math.random()<.5?1:-1);if(NET.role)S.serve=1.5;NET.rm.me=NET.rm.them=false;S.state='play';show(null);hudOn();blip(660,.12);}
+function hudOn(){$('hud').classList.remove('hide');$('bPause').classList.toggle('hide',!!NET.role)}
 function pause(){S.state='paused';show('pause')}function resume(){S.state='play';show(null);last=performance.now()}
-$('bStart').onclick=start;$('bAgain').onclick=start;$('bResume').onclick=resume;$('bPause').onclick=()=>S.state==='play'?pause():S.state==='paused'&&resume();
-const toMenu=()=>{S.state='menu';show('menu');$('hud').classList.add('hide');S.pw={p:{},a:{}};renderHud()};$('bQuit').onclick=toMenu;$('bMenu').onclick=toMenu;
+$('bStart').onclick=start;$('bAgain').onclick=()=>{if(!NET.role)return start();NET.rm.me=true;netSend({t:'rm'});$('bAgain').textContent='Waiting for opponent…';checkRematch()};$('bResume').onclick=resume;$('bPause').onclick=()=>S.state==='play'?pause():S.state==='paused'&&resume();
+const toMenu=()=>{S.state='menu';show('menu');$('hud').classList.add('hide');S.pw={p:{},a:{}};renderHud()};$('bQuit').onclick=toMenu;$('bMenu').onclick=()=>{if(NET.role){netSend({t:'bye'});netClose()}toMenu()};
 $('bMute').onclick=()=>{S.muted=!S.muted;$('bMute').textContent=S.muted?'🔇':'🔊'};
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.state==='play')pause()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.state==='play'&&!NET.role)pause()});
 // ---- helpers
 const opp=s=>s==='p'?'a':'p';
 const has=(s,k)=>S.pw[s][k]>0;
 const padW=s=>PW*(has(s,'big')?1.55:1)*(has(opp(s),'shrink')?.6:1);
-function mkBall(x,y,vx,vy,owner){return{x,y,vx,vy,cool:0,mult:1,owner:owner||null,trail:[],curve:0,id:Math.random()}}
+let bid=0;function mkBall(x,y,vx,vy,owner){return{x,y,vx,vy,cool:0,mult:1,owner:owner||null,trail:[],curve:0,id:++bid,pt:null}}
 function serve(dir){S.balls=[];const a=(Math.random()-.5)*0.9,s=380;const b=mkBall(W/2,H/2,Math.sin(a)*s,Math.cos(a)*s*dir,null);S.balls.push(b);S.serve=0.8;S.combo=0;}
 function spark(x,y,c,n,sp=240,life=.5){n=Math.min(n,MAXP-S.parts.length);for(let i=0;i<n;i++){const a=Math.random()*6.283,s=40+Math.random()*sp;S.parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:life*(.6+Math.random()*.6),c})}}
 function ring(x,y,c,r=60,life=.35,w=4){if(S.rings.length<24)S.rings.push({x,y,c,r,l:life,L:life,w})}
@@ -108,20 +135,26 @@ function swirl(x,y,c,side){if(S.swirls.length<12)S.swirls.push({x,y,c,l:.6,side}
 const speed=b=>Math.hypot(b.vx,b.vy);
 function portalSeg(side){// side 'p' left, 'a' right
  if(has(side,'mega'))return{c:H/2,h:H/2};return{c:side==='p'?S.pPortal.y:S.aPortal.y,h:PL/2};}
-function teleport(b,fromLeft){const ss=fromLeft?'p':'a',ds=opp(ss),src=portalSeg(ss),dst=portalSeg(ds);
- const rel=Math.max(-1,Math.min(1,(b.y-src.c)/src.h));
- swirl(b.x,b.y,COL[ss],ss);spark(b.x,b.y,COL[ss],10);
- b.y=Math.max(BR,Math.min(H-BR,dst.c+rel*(dst.h-BR)));b.x=fromLeft?W-BR-1:BR+1;b.vx=fromLeft?-Math.abs(b.vx):Math.abs(b.vx);
+const mapY=(r,dst)=>Math.max(BR,Math.min(H-BR,dst.c+r*(dst.h-BR)));
+// vertical offset between the two portal mouths for a ball in transit (seamless: exit copy = entry copy + (±W, dy))
+function ptDy(p){return p.done||p.g?p.dy:mapY(p.r,portalSeg(opp(p.s)))-p.y0}
+// twin = the part of the ball visible at the OTHER portal while it straddles a wall
+function twin(b){const p=b.pt;if(!p)return null;const L=p.s==='p',dy=ptDy(p),onSrc=L?b.x<W/2:b.x>W/2;
+ if(onSrc){if(L?b.x>BR:b.x<W-BR)return null;return{x:b.x+(L?W:-W),y:b.y+dy}}
+ if(L?b.x<W-BR:b.x>BR)return null;return{x:b.x+(L?-W:W),y:b.y-dy}}
+S.twin=twin;
+function teleport(b,fromLeft){const ds=fromLeft?'a':'p',p=b.pt;
+ // walls face each other, so the portal transform is a pure translation: momentum (vx,vy) is preserved as-is
+ const dy=ptDy(p);p.dy=dy;p.done=true;b.x+=fromLeft?W:-W;b.y=Math.max(BR,Math.min(H-BR,b.y+dy));
  if(b.mult<CAP){const k=Math.min(1.05,CAP/b.mult);b.vx*=k;b.vy*=k;b.mult*=k;}
- b.cool=COOL;S.teleports++;b.trail=[];swirl(b.x,b.y,COL[ds],ds);spark(b.x,b.y,COL[ds],10);ring(b.x,b.y,COL[ds],50,.3,3);
- blip(fromLeft?880:740,.18,'sawtooth',.05,fromLeft?300:260);}
+ b.cool=COOL;S.teleports++;fx('t',b.x,b.y,ds,fromLeft?1:0);}
 // ---- powers
 function givePower(side,k){const P=POW[k];if(!P)return;S.log.push(side+':'+k);
- S.announce={t:k,n:P.n,c:P.c,side,l:1.4};spark(W/2,side==='p'?H*.75:H*.25,P.c,30,320,.8);blip(520,.25,'triangle',.08,1040);
+ fx('p',side,k);
  if(k==='multi'){const src=S.balls.slice(0,4);for(const b of src){if(S.balls.length>=5)break;const nb=mkBall(b.x,b.y,-b.vx||120,b.vy,b.owner);nb.mult=b.mult;nb.cool=.2;S.balls.push(nb);}ring(src[0].x,src[0].y,'#fff',80,.4,5);}
  else S.pw[side][k]=P.d;
  renderHud();}
-function renderHud(){for(const s of['p','a']){const el=$(s==='p'?'pwP':'pwA');let h='';for(const k in S.pw[s]){const t=S.pw[s][k];if(t>0)h+=`<span class="chip" data-k="${k}" style="--c:${POW[k].c}">${POW[k].i} ${k==='shield'?'':Math.ceil(t)+'s'}</span>`}
+function renderHud(){for(const s of['p','a']){const el=$(s===me()?'pwP':'pwA');let h='';for(const k in S.pw[s]){const t=S.pw[s][k];if(t>0)h+=`<span class="chip" data-k="${k}" style="--c:${POW[k].c}">${POW[k].i} ${k==='shield'?'':Math.ceil(t)+'s'}</span>`}
  if(el.innerHTML!==h)el.innerHTML=h;}}
 function spawnOrb(k,x,y){k=k||PKEYS[Math.floor(Math.random()*PKEYS.length)];S.orbs.push({k,x:x??(90+Math.random()*(W-180)),y:y??(H*.3+Math.random()*H*.4),l:11,t:0});}
 S.givePower=givePower;S.spawnOrb=spawnOrb;S.POW=POW;
@@ -133,13 +166,24 @@ function paddleHit(b,px,top){const side=top?'a':'p',w=padW(side),off=Math.max(-1
  let sp=Math.min(speed(b)*1.04,1400);const a=off*1.05;
  b.vx=Math.sin(a)*sp;b.vy=Math.cos(a)*sp*(top?1:-1);if(Math.abs(b.vy)<sp*.45)b.vy=Math.sign(b.vy)*sp*.45;
  b.owner=side;b.curve=has(side,'curve')?(off>=0?-1:1)*700:0;
- S.combo++;const k=Math.min(1,S.combo/12),fast=sp>700;const c=COL[side];
- spark(b.x,b.y,c,12+Math.round(k*24),220+k*260,.45+k*.3);
- ring(b.x,b.y,c,50+sp*.05+k*60,.35,4+k*4);if(S.combo>=5)ring(b.x,b.y,'#fff',30+k*90,.45,2);
- S.shake=Math.min(16,S.shake+sp/140+k*4);S.flash=Math.min(.35,.08+sp/4000+k*.12);
- if(fast)S.hitstop=.04;
- (top?S.ai:S.player).sq=1;
- blip((top?330:440)*(1+Math.min(S.combo,12)*.06),.08,'square',.06);}
+ S.combo++;fx('h',b.x,b.y,side,sp,S.combo);}
+// ---- shared effects (run locally; host also forwards them to the guest). v3: ~45% softer than v2
+const FX={
+ h(x,y,side,sp,combo){const k=Math.min(1,combo/12),c=COL[side];
+  spark(x,y,c,6+Math.round(k*12),140+k*150,.3+k*.2);
+  ring(x,y,c,34+sp*.03+k*34,.26,2.5+k*2);if(combo>=5)ring(x,y,'#fff',20+k*50,.32,1.5);
+  S.shake=Math.min(7,S.shake+sp/320+k*2);S.flash=Math.min(.12,.02+sp/10000+k*.05);
+  if(sp>1150)S.hitstop=.018;// only very fast hits get a tiny freeze
+  (side==='a'?S.ai:S.player).sq=.7;
+  blip((side==='a'?330:440)*(1+Math.min(combo,12)*.06),.07,'square',.05);},
+ w(){blip(220,.04)},
+ t(x,y,ds,fromLeft){spark(x,y,COL[ds],4,110,.3);blip(fromLeft?880:740,.14,'sine',.04,fromLeft?520:440);},
+ s(x,y,player){const c=player?COL.p:COL.a,good=me()==='p'?player:!player;spark(x,y,c,22,230,.55);ring(x,y,c,110,.45,4);S.shake=Math.min(9,S.shake+5);S.flash=.14;
+  blip(good?990:160,.3,'triangle',.08,good?1500:80);},
+ sh(x,y){ring(x,y,POW.shield.c,90,.45,4);spark(x,y,POW.shield.c,14,200);S.shake+=3;blip(300,.2,'triangle',.08,900);},
+ p(side,k){const P=POW[k];S.announce={t:k,n:P.n,c:P.c,side,l:1.4};spark(W/2,side==='p'?H*.75:H*.25,P.c,18,240,.6);blip(520,.25,'triangle',.08,1040);}};
+const r1=v=>typeof v==='number'?Math.round(v*10)/10:v;
+function fx(n,...a){FX[n](...a);if(NET.role==='host'&&NET.open&&NET.ev.length<60)NET.ev.push([n,...a.map(r1)]);}
 // ---- AI
 function aiUpdate(dt){const d=DIFF[S.diff],ai=S.ai,ap=S.aPortal;ai.t-=dt;
  // track the most threatening ball (moving up, closest to top)
@@ -155,12 +199,15 @@ function aiUpdate(dt){const d=DIFF[S.diff],ai=S.ai,ap=S.aPortal;ai.t-=dt;
   if(anyb&&anyb.vx>0&&Math.random()<d.use){const t=(W-BR-anyb.x)/anyb.vx;ap.ty=anyb.y+anyb.vy*t;}
   else if(anyb&&anyb.vx>0&&anyb.vy>0&&Math.random()<.5)ap.ty=anyb.y;else ap.ty=PMIN+Math.random()*(PMAX-PMIN)*.5;}
  ap.ty=Math.max(PMIN,Math.min(PMAX,ap.ty));const dy=ap.ty-ap.y;ap.y+=Math.sign(dy)*Math.min(Math.abs(dy),d.pspd*dt);}
+// ---- online opponent (host side): guest's pointer drives the top paddle + right portal
+function remoteUpdate(dt){const ai=S.ai,ap=S.aPortal,w=padW('a');ai.x+=(ai.tx-ai.x)*Math.min(1,dt*25);ai.x=Math.max(w/2,Math.min(W-w/2,ai.x));
+ if(!has('p','lock')){const dy=ap.ty-ap.y;ap.y+=Math.sign(dy)*Math.min(Math.abs(dy),PORTAL_SPD*dt);}}
 // ---- update
 function update(dt){const pl=S.player,pp=S.pPortal;
  if(!S.hadInput){pl.tx=S.balls[0]?S.balls[0].x:W/2;pp.ty=H/2;}
  const pw=padW('p');const dx=pl.tx-pl.x;pl.x+=dx*Math.min(1,dt*25);pl.x=Math.max(pw/2,Math.min(W-pw/2,pl.x));
  if(!has('a','lock')){const dy=pp.ty-pp.y;pp.y+=Math.sign(dy)*Math.min(Math.abs(dy),PORTAL_SPD*dt);}
- aiUpdate(dt);
+ if(NET.role==='host')remoteUpdate(dt);else aiUpdate(dt);
  pl.sq=Math.max(0,pl.sq-dt*5);S.ai.sq=Math.max(0,S.ai.sq-dt*5);
  // power timers
  let ch=false;for(const s of['p','a'])for(const k in S.pw[s])if(S.pw[s][k]>0){const o=Math.ceil(S.pw[s][k]);S.pw[s][k]-=dt;if(S.pw[s][k]<=0){S.pw[s][k]=0;delete S.pw[s][k];ch=true;}else if(Math.ceil(S.pw[s][k])!==o)ch=true;}
@@ -170,6 +217,11 @@ function update(dt){const pl=S.player,pp=S.pPortal;
  if(S.serve>0){S.serve-=dt;return}
  for(const b of S.balls.slice()){if(stepBall(b,dt)==='scored')return;}
 }
+// ball touching a wall: start/continue passing through the portal (ball straddles both mouths), or bounce
+function wall(b,side){const L=side==='p',s=portalSeg(side);let go=b.pt&&b.pt.s===side&&!b.pt.done;
+ if(!go&&!b.pt&&b.cool<=0&&Math.abs(b.y-s.c)<s.h){b.pt={s:side,r:Math.max(-1,Math.min(1,(b.y-s.c)/s.h)),y0:b.y};go=true}
+ if(go){if(L?b.x<=0:b.x>=W){teleport(b,L);return true}return false}
+ b.x=L?BR:W-BR;b.vx=L?Math.abs(b.vx):-Math.abs(b.vx);b.curve=0;fx('w');return false}
 function stepBall(b,dt){const pl=S.player,pp=S.pPortal;
  b.cool=Math.max(0,b.cool-dt);
  // speed modifiers
@@ -178,13 +230,14 @@ function stepBall(b,dt){const pl=S.player,pp=S.pPortal;
  if(b.curve){b.vx+=b.curve*dt;b.curve*=Math.pow(.25,dt);if(Math.abs(b.curve)<30)b.curve=0;}
  const steps=Math.ceil(speed(b)*f*dt/6)||1;const h=dt*f/steps;
  for(let i=0;i<steps;i++){b.x+=b.vx*h;b.y+=b.vy*h;
-  if(b.x-BR<=0){const s=portalSeg('p');if(b.cool<=0&&Math.abs(b.y-s.c)<s.h){teleport(b,true);continue}b.x=BR;b.vx=Math.abs(b.vx);b.curve=0;blip(220,.04)}
-  if(b.x+BR>=W){const s=portalSeg('a');if(b.cool<=0&&Math.abs(b.y-s.c)<s.h){teleport(b,false);continue}b.x=W-BR;b.vx=-Math.abs(b.vx);b.curve=0;blip(220,.04)}
+  if(b.pt&&b.x>BR&&b.x<W-BR)b.pt=null;// fully through
+  if(b.x-BR<=0&&b.vx<0&&wall(b,'p'))continue;
+  if(b.x+BR>=W&&b.vx>0&&wall(b,'a'))continue;
   if(b.vy>0&&b.y+BR>=PY&&b.y-BR<=PY+PH&&Math.abs(b.x-pl.x)<=padW('p')/2+BR){b.y=PY-BR;paddleHit(b,pl.x,false)}
   if(b.vy<0&&b.y-BR<=AIY+PH&&b.y+BR>=AIY&&Math.abs(b.x-S.ai.x)<=padW('a')/2+BR){b.y=AIY+PH+BR;paddleHit(b,S.ai.x,true)}
   // shields
-  if(b.vy>0&&b.y+BR>=H-14&&has('p','shield')){b.y=H-14-BR;b.vy=-Math.abs(b.vy);delete S.pw.p.shield;renderHud();ring(b.x,H-14,POW.shield.c,120,.5,6);spark(b.x,H-14,POW.shield.c,30);S.shake+=8;blip(300,.2,'triangle',.08,900);}
-  if(b.vy<0&&b.y-BR<=14&&has('a','shield')){b.y=14+BR;b.vy=Math.abs(b.vy);delete S.pw.a.shield;renderHud();ring(b.x,14,POW.shield.c,120,.5,6);spark(b.x,14,POW.shield.c,30);S.shake+=8;blip(300,.2,'triangle',.08,900);}
+  if(b.vy>0&&b.y+BR>=H-14&&has('p','shield')){b.y=H-14-BR;b.vy=-Math.abs(b.vy);delete S.pw.p.shield;renderHud();fx('sh',b.x,H-14);}
+  if(b.vy<0&&b.y-BR<=14&&has('a','shield')){b.y=14+BR;b.vy=Math.abs(b.vy);delete S.pw.a.shield;renderHud();fx('sh',b.x,14);}
   if(b.y>H+BR){score(false,b);return'scored'}if(b.y<-BR){score(true,b);return'scored'}}
  // orbs
  for(const o of S.orbs)if(b.owner&&Math.hypot(o.x-b.x,o.y-b.y)<24+BR){o.l=0;ring(o.x,o.y,POW[o.k].c,90,.45,5);givePower(b.owner,o.k);}
@@ -193,20 +246,35 @@ function stepBall(b,dt){const pl=S.player,pp=S.pPortal;
  if(b.owner&&has(b.owner,'fire')&&Math.random()<.6&&S.parts.length<MAXP)S.parts.push({x:b.x,y:b.y,vx:(Math.random()-.5)*60,vy:(Math.random()-.5)*60,l:.35,c:Math.random()<.5?'#ff5a1f':'#ffd24d'});
 }
 // Multi-ball rule: the FIRST ball to pass an end line scores the point and ends the rally (all balls cleared, re-serve).
-function score(player,b){player?S.ps++:S.as++;S.lastScorer=player?'player':'ai';const c=player?COL.p:COL.a;
- spark(b.x,Math.max(0,Math.min(H,b.y)),c,40,320,.7);ring(b.x,Math.max(0,Math.min(H,b.y)),c,160,.5,6);S.shake=Math.min(20,S.shake+10);S.flash=.3;
- blip(player?990:160,.3,'triangle',.08,player?1500:80);
- if(S.ps>=WIN||S.as>=WIN){S.state='over';$('winT').textContent=S.ps>S.as?'YOU WIN':'AI WINS';$('winS').textContent=S.ps+' – '+S.as+' ('+['Easy','Normal','Hard'][S.diff]+(S.power?', Power Mode':'')+')';show('win');$('hud').classList.add('hide');}
+function score(player,b){player?S.ps++:S.as++;S.lastScorer=player?'player':'ai';
+ fx('s',b.x,Math.max(0,Math.min(H,b.y)),player);
+ if(S.ps>=WIN||S.as>=WIN){S.state='over';showWin();}
  serve(player?1:-1);}
+function showWin(){const mine=me()==='p',my=mine?S.ps:S.as,th=mine?S.as:S.ps;
+ $('winT').textContent=my>th?'YOU WIN':NET.role?'OPPONENT WINS':'AI WINS';
+ $('winS').textContent=NET.role?my+' – '+th+' (Online'+(S.power?', Power Mode':'')+')':S.ps+' – '+S.as+' ('+['Easy','Normal','Hard'][S.diff]+(S.power?', Power Mode':'')+')';
+ $('bAgain').textContent=NET.role?'↻ Rematch':'↻ Play again';$('bMenu').textContent=NET.role?'Leave':'Menu';show('win');$('hud').classList.add('hide');}
 // ---- draw
+const flip=()=>NET.role==='guest';
+function T(str,x,y){if(flip()){cx.save();cx.translate(x,y);cx.rotate(Math.PI);cx.fillText(str,0,0);cx.restore()}else cx.fillText(str,x,y)}
 function glowRect(x,y,w,h,c,b=18){cx.shadowColor=c;cx.shadowBlur=b;cx.fillStyle=c;cx.fillRect(x,y,w,h);}
 function ballColor(sp){const t=Math.max(0,Math.min(1,(sp-380)/800));return`hsl(${190-t*190},100%,${85-t*25}%)`}
-function drawPortal(side,t){const c=COL[side],x=side==='p'?-6:W-6,seg=portalSeg(side),mega=has(side,'mega'),lock=has(opp(side),'lock');
- const pulse=.6+.4*Math.sin(t/180),y0=seg.c-seg.h,len=seg.h*2,col=mega?(Math.floor(t/90)%2?POW.mega.c:c):c;
- cx.globalAlpha=.25*pulse;glowRect(x-6,y0-6,24,len+12,col,40);cx.globalAlpha=1;glowRect(x,y0,12,len,col,mega?45:30);
- cx.shadowBlur=0;cx.fillStyle=lock?'#ffe14d':'#fff';cx.fillRect(x+4,y0+6,4,len-12);
- if(mega){cx.strokeStyle=POW.mega.c;cx.lineWidth=2;for(let i=0;i<8;i++){const yy=(t/4+i*H/8)%H;cx.beginPath();cx.arc(side==='p'?0:W,yy,20,side==='p'?-1.2:1.9,side==='p'?1.2:4.4);cx.stroke()}}
- if(lock){cx.font='26px system-ui';cx.textAlign='center';cx.fillText('🔒',side==='p'?28:W-28,seg.c);}}
+// Portal = an oval "window" on the wall. Inside you glimpse the other side (partner colour + whatever is approaching the partner portal).
+function drawPortal(side,t){const L=side==='p',wx=L?0:W,dir=L?1:-1,seg=portalSeg(side),c=COL[side],oc=COL[opp(side)],mega=has(side,'mega'),lock=has(opp(side),'lock');
+ const os=portalSeg(opp(side)),pulse=.5+.5*Math.sin(t/260),rx=mega?16:13,ry=seg.h,col=mega?POW.mega.c:c;
+ cx.save();cx.beginPath();cx.ellipse(wx,seg.c,rx,ry,0,0,6.283);cx.clip();
+ const g=cx.createLinearGradient(wx,0,wx+dir*rx,0);g.addColorStop(0,oc+'66');g.addColorStop(1,oc+'14');cx.fillStyle=g;cx.fillRect(wx-rx,seg.c-ry,rx*2,ry*2);
+ // faint grid of the other side, scrolling with the partner portal's position
+ cx.strokeStyle=oc+'30';cx.lineWidth=1;cx.beginPath();const off=((seg.c-os.c)%50+50)%50;for(let y=seg.c-ry+off;y<seg.c+ry;y+=50){cx.moveTo(wx-rx,y);cx.lineTo(wx+rx,y)}cx.stroke();
+ // glimpse: balls heading into the partner portal show up faintly here before they arrive
+ for(const b of S.balls){if(b.pt)continue;const d=L?W-b.x:b.x,tow=L?b.vx>0:b.vx<0;if(d>220||!tow)continue;const rel=(b.y-os.c)/os.h;if(Math.abs(rel)>1.15)continue;
+  cx.globalAlpha=(1-d/220)*.55;cx.fillStyle='#fff';cx.beginPath();cx.arc(wx+dir*rx*.35,seg.c+rel*ry,BR*.75,0,6.283);cx.fill();}
+ cx.globalAlpha=1;cx.restore();
+ // rims: own colour outside, partner colour inside (matching edge glow)
+ cx.shadowColor=col;cx.shadowBlur=14+pulse*8;cx.strokeStyle=col;cx.lineWidth=3;cx.beginPath();cx.ellipse(wx,seg.c,rx,ry,0,L?-Math.PI/2:Math.PI/2,L?Math.PI/2:Math.PI*1.5);cx.stroke();
+ cx.shadowColor=oc;cx.shadowBlur=8;cx.strokeStyle=oc+'aa';cx.lineWidth=1.5;cx.beginPath();cx.ellipse(wx,seg.c,rx-4,ry-5,0,L?-Math.PI/2:Math.PI/2,L?Math.PI/2:Math.PI*1.5);cx.stroke();
+ glowRect(L?-4:W,seg.c-ry,4,ry*2,lock?'#ffe14d':col,12);cx.shadowBlur=0;
+ if(lock){cx.font='26px system-ui';cx.textAlign='center';cx.fillStyle='#fff';T('🔒',L?32:W-32,seg.c);}}
 function drawPaddle(side,t){const p=side==='p'?S.player:S.ai,y=side==='p'?PY:AIY,w=padW(side),c=COL[side],q=p.sq;
  const sw=w*(1+q*.18),sh=PH*(1-q*.35);cx.save();cx.translate(p.x,y+PH/2);
  glowRect(-sw/2,-sh/2,sw,sh,c,22+q*30);if(q>0){cx.globalAlpha=q*.8;glowRect(-sw/2,-sh/2,sw,sh,'#fff',30);cx.globalAlpha=1}
@@ -215,13 +283,13 @@ function drawPaddle(side,t){const p=side==='p'?S.player:S.ai,y=side==='p'?PY:AIY
  cx.restore();}
 function draw(t){cx.setTransform(1,0,0,1,0,0);cx.fillStyle='#05040f';cx.fillRect(0,0,cv.width,cv.height);
  const sx=(Math.random()-.5)*S.shake,sy=(Math.random()-.5)*S.shake;
- cx.setTransform(sc*dpr,0,0,sc*dpr,(ox+sx*sc)*dpr,(oy+sy*sc)*dpr);
+ cx.setTransform(sc*dpr,0,0,sc*dpr,(ox+sx*sc)*dpr,(oy+sy*sc)*dpr);if(flip())cx.transform(-1,0,0,-1,W,H);
  cx.shadowBlur=0;cx.fillStyle='#0a0a22';cx.fillRect(0,0,W,H);
  cx.strokeStyle='#ffffff12';cx.lineWidth=1;cx.beginPath();for(let y=0;y<=H;y+=50){cx.moveTo(0,y);cx.lineTo(W,y)}for(let x=0;x<=W;x+=50){cx.moveTo(x,0);cx.lineTo(x,H)}cx.stroke();
  // slow-mo zones
  if(has('p','slow')){cx.fillStyle='#9d8cff18';cx.fillRect(0,H/2,W,H/2)}if(has('a','slow')){cx.fillStyle='#9d8cff18';cx.fillRect(0,0,W,H/2)}
  cx.setLineDash([12,12]);cx.strokeStyle='#ffffff33';cx.lineWidth=2;cx.beginPath();cx.moveTo(0,H/2);cx.lineTo(W,H/2);cx.stroke();cx.setLineDash([]);
- cx.font='bold 110px system-ui,sans-serif';cx.textAlign='center';cx.textBaseline='middle';cx.fillStyle='#ff9a2e22';cx.fillText(S.as,W/2,H/2-130);cx.fillStyle='#39b8ff22';cx.fillText(S.ps,W/2,H/2+130);
+ cx.font='bold 110px system-ui,sans-serif';cx.textAlign='center';cx.textBaseline='middle';cx.fillStyle='#ff9a2e22';T(S.as,W/2,H/2-130);cx.fillStyle='#39b8ff22';T(S.ps,W/2,H/2+130);
  glowRect(-4,0,4,H,'#8a8acc',6);glowRect(W,0,4,H,'#8a8acc',6);
  drawPortal('p',t);drawPortal('a',t);
  // shields
@@ -229,38 +297,127 @@ function draw(t){cx.setTransform(1,0,0,1,0,0);cx.fillStyle='#05040f';cx.fillRect
  // orbs
  for(const o of S.orbs){const P=POW[o.k],r=22+Math.sin(o.t*5)*3,fade=o.l<2?(Math.floor(o.l*8)%2?.4:1):1;cx.globalAlpha=fade;
   cx.shadowColor=P.c;cx.shadowBlur=25;cx.strokeStyle=P.c;cx.lineWidth=3;cx.beginPath();cx.arc(o.x,o.y,r,0,6.283);cx.stroke();
-  cx.fillStyle=P.c+'33';cx.fill();cx.shadowBlur=0;cx.font='22px system-ui';cx.fillStyle='#fff';cx.fillText(P.i,o.x,o.y+1);cx.globalAlpha=1;}
+  cx.fillStyle=P.c+'33';cx.fill();cx.shadowBlur=0;cx.font='22px system-ui';cx.fillStyle='#fff';T(P.i,o.x,o.y+1);cx.globalAlpha=1;}
  drawPaddle('a',t);drawPaddle('p',t);
  // swirls
  for(const s of S.swirls){const k=s.l/.6;cx.strokeStyle=s.c;cx.shadowColor=s.c;cx.shadowBlur=15;cx.lineWidth=3;
   for(let i=0;i<3;i++){const r=(1-k)*50+10+i*10,a0=t/80+i*2.1;cx.globalAlpha=k;cx.beginPath();cx.arc(s.x,s.y,r,a0,a0+2.2);cx.stroke()}}
  cx.globalAlpha=1;
  // rings
- for(const r of S.rings){const k=r.l/r.L;cx.globalAlpha=k;cx.strokeStyle=r.c;cx.shadowColor=r.c;cx.shadowBlur=14;cx.lineWidth=r.w*k+1;cx.beginPath();cx.arc(r.x,r.y,r.r*(1-k)+6,0,6.283);cx.stroke()}
+ for(const r of S.rings){const k=r.l/r.L;cx.globalAlpha=k*.7;cx.strokeStyle=r.c;cx.shadowColor=r.c;cx.shadowBlur=8;cx.lineWidth=r.w*k+1;cx.beginPath();cx.arc(r.x,r.y,r.r*(1-k)+6,0,6.283);cx.stroke()}
  cx.globalAlpha=1;
  // balls
+ cx.save();cx.beginPath();cx.rect(0,-60,W,H+120);cx.clip();// ball is clipped at the walls: it disappears INTO a portal while its twin emerges from the other
  for(const b of S.balls){const sp=speed(b),col=b.owner&&has(b.owner,'fire')?'#ff7a1f':ballColor(sp);
   let alpha=1;if(b.owner&&has(b.owner,'ghost')&&((b.owner==='p'&&b.vy<0)||(b.owner==='a'&&b.vy>0)))alpha=(Math.sin(t/45)>0.2)?.85:.08;
   cx.shadowBlur=0;const n=b.trail.length;b.trail.forEach((p,i)=>{cx.globalAlpha=alpha*(i/n)*(sp>700?.8:.5);cx.fillStyle=col;cx.beginPath();cx.arc(p.x,p.y,BR*(i/n)*(sp>700?1.1:1),0,6.283);cx.fill()});
-  cx.globalAlpha=alpha;cx.shadowColor=col;cx.shadowBlur=20+Math.min(30,sp/40);cx.fillStyle=S.serve>0&&Math.floor(t/120)%2?'#ffffff55':col;cx.beginPath();cx.arc(b.x,b.y,BR,0,6.283);cx.fill();
-  cx.fillStyle='#fff';cx.shadowBlur=0;cx.beginPath();cx.arc(b.x,b.y,BR*.45,0,6.283);cx.fill();cx.globalAlpha=1;}
+  const tw=twin(b);for(const q of tw?[b,tw]:[b]){
+  cx.globalAlpha=alpha;cx.shadowColor=col;cx.shadowBlur=20+Math.min(30,sp/40);cx.fillStyle=S.serve>0&&Math.floor(t/120)%2?'#ffffff55':col;cx.beginPath();cx.arc(q.x,q.y,BR,0,6.283);cx.fill();
+  cx.fillStyle='#fff';cx.shadowBlur=0;cx.beginPath();cx.arc(q.x,q.y,BR*.45,0,6.283);cx.fill();}cx.globalAlpha=1;}
+ cx.restore();
  // particles (no shadow for perf)
  cx.shadowBlur=0;for(const p of S.parts){cx.globalAlpha=Math.max(0,Math.min(1,p.l*2));cx.fillStyle=p.c;cx.fillRect(p.x-2,p.y-2,4,4)}cx.globalAlpha=1;
  // combo
- if(S.combo>=3&&S.state==='play'){const k=Math.min(1,S.combo/12);cx.font=`bold ${28+k*26}px system-ui`;cx.fillStyle=`hsl(${280-k*240},100%,65%)`;cx.shadowColor=cx.fillStyle;cx.shadowBlur=10+k*20;cx.fillText('COMBO x'+S.combo,W/2,H/2);cx.shadowBlur=0}
+ if(S.combo>=3&&S.state==='play'){const k=Math.min(1,S.combo/12);cx.font=`bold ${28+k*26}px system-ui`;cx.fillStyle=`hsl(${280-k*240},100%,65%)`;cx.shadowColor=cx.fillStyle;cx.shadowBlur=8+k*12;T('COMBO x'+S.combo,W/2,H/2);cx.shadowBlur=0}
  // announce
- if(S.announce){const a=S.announce,k=a.l/1.4,s=1+(1-k)*.25;cx.save();cx.translate(W/2,H/2+(a.side==='p'?70:-70));cx.scale(s,s);cx.globalAlpha=Math.min(1,k*2);
-  cx.font='bold 50px system-ui';cx.fillStyle=a.c;cx.shadowColor=a.c;cx.shadowBlur=25;cx.fillText(POW[a.t].i+' '+a.n,0,0);cx.shadowBlur=0;cx.font='bold 20px system-ui';cx.fillStyle=COL[a.side];cx.fillText(a.side==='p'?'YOU GOT IT':'AI GOT IT',0,38);cx.restore();}
+ if(S.announce){const a=S.announce,k=a.l/1.4,s=1+(1-k)*.25;cx.save();cx.translate(W/2,H/2+(a.side==='p'?70:-70));if(flip())cx.rotate(Math.PI);cx.scale(s,s);cx.globalAlpha=Math.min(1,k*2);
+  cx.font='bold 50px system-ui';cx.fillStyle=a.c;cx.shadowColor=a.c;cx.shadowBlur=25;cx.fillText(POW[a.t].i+' '+a.n,0,0);cx.shadowBlur=0;cx.font='bold 20px system-ui';cx.fillStyle=COL[a.side];cx.fillText(a.side===me()?'YOU GOT IT':NET.role?'OPPONENT GOT IT':'AI GOT IT',0,38);cx.restore();}
  if(S.flash>0){cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=S.flash;cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height);cx.globalAlpha=1;}
  if(S.state==='play'&&!S.hadInput){cx.setTransform(sc*dpr,0,0,sc*dpr,ox*dpr,oy*dpr);cx.fillStyle='#ffffffaa';cx.font='22px system-ui';cx.fillText('Move finger / mouse: X = paddle, Y = portal',W/2,H/2+40);}}
 let last=performance.now();
 function loop(t){let dt=Math.min(.033,(t-last)/1000);last=t;
- if(S.state==='play'){if(S.hitstop>0){S.hitstop-=dt}else update(dt);}
- S.shake*=Math.pow(.002,dt);if(S.shake<.3)S.shake=0;S.flash=Math.max(0,S.flash-dt*1.6);
+ if(NET.role==='guest')guestTick(dt);
+ else if(S.state==='play'){if(S.hitstop>0){S.hitstop-=dt}else update(dt);}
+ netTick(t);
+ S.shake*=Math.pow(.0004,dt);if(S.shake<.3)S.shake=0;S.flash=Math.max(0,S.flash-dt*1.6);
  if(S.announce){S.announce.l-=dt;if(S.announce.l<=0)S.announce=null}
  for(const p of S.parts){p.l-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=.95;p.vy*=.95}S.parts=S.parts.filter(p=>p.l>0);
  for(const r of S.rings)r.l-=dt;S.rings=S.rings.filter(r=>r.l>0);for(const s of S.swirls)s.l-=dt;S.swirls=S.swirls.filter(s=>s.l>0);
  draw(t);requestAnimationFrame(loop);}
 requestAnimationFrame(loop);
+// ================= ONLINE (WebRTC P2P via PeerJS public broker) =================
+const PFX='portalpong-v3-',CODEC='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',INTERP=70;
+const genCode=()=>Array.from({length:5},()=>CODEC[Math.floor(Math.random()*CODEC.length)]).join('');
+function loadPeer(){if(window.__ppPeer||window.Peer)return Promise.resolve();
+ const tryU=u=>new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=u;sc.onload=res;sc.onerror=rej;document.head.appendChild(sc)});
+ return tryU('https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js').catch(()=>tryU('https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js'));}
+const PeerC=()=>window.__ppPeer||window.Peer;
+function setStatus(m,err){NET.status=m;const el=$('onStatus');el.textContent=m;el.classList.toggle('err',!!err)}
+function pill(){const el=$('nst');if(!NET.role||S.state==='menu'&&!NET.open){el.classList.add('hide');return}el.classList.remove('hide');
+ el.textContent=NET.open?'🟢 Online · '+(NET.role==='host'?'host':'guest')+(NET.rtt?' · '+Math.round(NET.rtt)+' ms':''):'🟡 Connecting…';}
+function netSend(m){if(NET.conn&&NET.open)try{NET.conn.send(m)}catch(e){}}
+function netClose(){const c=NET.conn,p=NET.peer;NET.role=null;NET.open=false;NET.conn=NET.peer=null;NET.snaps=[];NET.ev=[];clearTimeout(NET.jt);
+ try{c&&c.close()}catch(e){}try{p&&p.destroy()}catch(e){}$('nst').classList.add('hide');$('bAgain').textContent='↻ Play again';$('bMenu').textContent='Menu';renderHud();}
+S.netClose=netClose;
+function lost(msg){if(!NET.role)return;netClose();S.state='menu';S.balls=[];S.pw={p:{},a:{}};renderHud();$('hud').classList.add('hide');$('dcMsg').textContent=msg;show('dc');}
+function lobby(room){show('online');$('onChoose').classList.toggle('hide',room);$('onRoom').classList.toggle('hide',!room);}
+function attach(c){NET.conn=c;
+ c.on('open',()=>{NET.open=true;NET.last=performance.now();clearTimeout(NET.jt);
+  if(NET.role==='host'){setStatus('Opponent joined! Starting…');setTimeout(()=>{if(NET.open&&NET.role==='host')start()},700)}else setStatus('Connected! Waiting for host…');pill()});
+ c.on('data',onMsg);c.on('close',()=>lost('Your opponent disconnected.'));c.on('error',e=>lost('Connection error: '+(e&&e.type||e)));}
+async function createRoom(){netClose();NET.role='host';lobby(true);$('roomCode').textContent='…';$('roomLink').value='';$('omode').classList.remove('hide');setStatus('Connecting to lobby server…');
+ try{await loadPeer()}catch(e){setStatus('Could not load PeerJS – are you online?',1);return}if(NET.role!=='host')return;
+ const code=genCode(),P=PeerC(),peer=NET.peer=new P(PFX+code);
+ peer.on('open',()=>{NET.code=code;$('roomCode').textContent=code;$('roomLink').value=location.origin+location.pathname+'?room='+code;setStatus('Waiting for opponent… share the code or link.')});
+ peer.on('connection',c=>{if(NET.conn){c.on('open',()=>{c.send({t:'full'});setTimeout(()=>c.close(),300)});return}attach(c)});
+ peer.on('disconnected',()=>{if(!NET.open&&NET.peer===peer)try{peer.reconnect()}catch(e){}});
+ peer.on('error',e=>{if(NET.peer!==peer)return;if(e.type==='unavailable-id'){NET.peer=null;try{peer.destroy()}catch(_){}createRoom();return}
+  if(NET.open)return;setStatus('Network error ('+e.type+'). Try again.',1)});}
+async function joinRoom(code){code=(code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length<4){setStatus('Enter the 5-letter room code',1);return}
+ netClose();NET.role='guest';NET.code=code;lobby(false);$('joinCode').value=code;setStatus('Connecting to room '+code+'…');
+ try{await loadPeer()}catch(e){setStatus('Could not load PeerJS – are you online?',1);return}if(NET.role!=='guest')return;
+ const P=PeerC(),peer=NET.peer=new P();
+ peer.on('open',()=>{attach(peer.connect(PFX+code,{reliable:true,serialization:'json'}));
+  NET.jt=setTimeout(()=>{if(!NET.open&&NET.role==='guest')setStatus("Couldn't connect. The room may be gone or your network blocks peer-to-peer.",1)},15000)});
+ peer.on('error',e=>{if(NET.peer!==peer||NET.open)return;setStatus(e.type==='peer-unavailable'?'Room '+code+' not found.':'Network error ('+e.type+').',1)});}
+S.createRoom=createRoom;S.joinRoom=joinRoom;
+function checkRematch(){if(NET.role==='host'&&NET.rm.me&&NET.rm.them)start();}
+function snap(){return{t:'s',st:S.state,ps:S.ps,as:S.as,pow:S.power?1:0,pw:S.pw,sv:S.serve>0?1:0,cb:S.combo,
+ px:r1(S.player.x),psq:r1(S.player.sq),ax:r1(S.ai.x),asq:r1(S.ai.sq),pp:r1(S.pPortal.y),ap:r1(S.aPortal.y),
+ b:S.balls.map(b=>[r1(b.x),r1(b.y),r1(b.vx),r1(b.vy),b.owner||0,b.pt?b.pt.s:0,b.pt?r1(ptDy(b.pt)):0,b.id]),
+ o:S.orbs.map(o=>[o.k,r1(o.x),r1(o.y),r1(o.l)]),ev:NET.ev.splice(0)}}
+function onMsg(m){if(!m||typeof m!=='object')return;NET.last=performance.now();
+ switch(m.t){
+ case 'in':if(NET.role==='host'){S.ai.tx=Math.max(0,Math.min(W,+m.x||0));S.aPortal.ty=Math.max(PMIN,Math.min(PMAX,+m.y||H/2));}break;
+ case 'rm':NET.rm.them=true;if(S.state==='over')$('winS').textContent+=' · Opponent wants a rematch!';checkRematch();break;
+ case 'bye':lost('Your opponent left the game.');break;
+ case 'full':lost('That room is full.');break;
+ case 'pi':netSend({t:'po',ts:m.ts});break;
+ case 'po':NET.rtt=performance.now()-m.ts;pill();break;
+ case 's':if(NET.role!=='guest')return;onSnap(m);break;}}
+function onSnap(d){const now=performance.now();NET.snaps.push({rt:now,d});while(NET.snaps.length>2&&NET.snaps[1].rt<now-1000)NET.snaps.shift();
+ for(const e of d.ev||[]){const f=FX[e[0]];if(f)try{f(...e.slice(1))}catch(_){}}
+ S.ps=d.ps;S.as=d.as;S.power=!!d.pow;S.combo=d.cb;S.serve=d.sv;
+ const pj=JSON.stringify(d.pw);if(pj!==NET.pwj){NET.pwj=pj;S.pw=d.pw;renderHud();}
+ if(d.st!==S.state){const prev=S.state;S.state=d.st;
+  if(d.st==='play'){NET.rm.me=NET.rm.them=false;show(null);hudOn();if(prev!=='over'){S.ai.tx=S.ai.x=W/2;}}
+  else if(d.st==='over')showWin();}
+ pill();}
+// guest: interpolate host snapshots ~70ms in the past; own paddle/portal are predicted locally for zero-lag feel
+function guestTick(dt){const sn=NET.snaps;if(!sn.length)return;const rt=performance.now()-INTERP;let a=sn[0],b=sn[0];
+ for(let i=sn.length-1;i>=0;i--)if(sn[i].rt<=rt){a=sn[i];b=sn[i+1]||sn[i];break}
+ const k=b===a?0:Math.max(0,Math.min(1,(rt-a.rt)/(b.rt-a.rt))),A=a.d,B=b.d,Lp=(u,v)=>u+(v-u)*k;
+ S.player.x=Lp(A.px,B.px);S.player.sq=B.psq;S.ai.sq=B.asq;S.pPortal.y=Lp(A.pp,B.pp);
+ const aw=padW('a');S.ai.x+=(S.ai.tx-S.ai.x)*Math.min(1,dt*25);S.ai.x=Math.max(aw/2,Math.min(W-aw/2,S.ai.x));
+ if(has('p','lock'))S.aPortal.y=Lp(A.ap,B.ap);else{const dy=S.aPortal.ty-S.aPortal.y;S.aPortal.y+=Math.sign(dy)*Math.min(Math.abs(dy),PORTAL_SPD*dt);}
+ const old={};for(const x of S.balls)old[x.id]=x;const am={};for(const x of A.b)am[x[7]]=x;
+ S.balls=B.b.map(q=>{const p=am[q[7]],u=p&&Math.abs(p[0]-q[0])<W/2?p:q,o=old[q[7]]||{trail:[]};
+  const nb={id:q[7],x:Lp(u[0],q[0]),y:Lp(u[1],q[1]),vx:q[2],vy:q[3],owner:q[4]||null,pt:q[5]?{s:q[5],dy:q[6],g:1}:null,trail:o.trail,cool:0,curve:0,mult:1};
+  const sp=speed(nb),tl=sp>800?26:sp>550?20:14;nb.trail.push({x:nb.x,y:nb.y});while(nb.trail.length>tl)nb.trail.shift();return nb});
+ const ot={};for(const o of S.orbs)ot[o.k+o.x]=o.t;S.orbs=B.o.map(o=>({k:o[0],x:o[1],y:o[2],l:o[3],t:(ot[o[0]+o[1]]||0)+dt}));
+ if(S.announce&&S.state!=='play')S.announce=null;}
+function netTick(t){if(!NET.role||!NET.open)return;
+ if(NET.role==='host'&&t-NET.lastSend>=33){NET.lastSend=t;netSend(snap());}
+ if(NET.role==='guest'&&NET.inDirty&&t-NET.lastIn>=25){NET.lastIn=t;NET.inDirty=false;netSend({t:'in',x:r1(S.ai.tx),y:r1(S.aPortal.ty)});}}
+setInterval(()=>{if(!NET.open)return;netSend({t:'pi',ts:performance.now()});if(NET.role==='guest')NET.inDirty=true;
+ if(performance.now()-NET.last>8000)lost('Connection lost (no data for 8 s).');},1000);
+addEventListener('beforeunload',()=>{if(NET.open)netSend({t:'bye'})});
+$('bOnline').onclick=()=>{lobby(false);$('joinCode').value='';setStatus('Create a room and send the code to a friend, or join theirs.');blip(500)};
+$('bCreate').onclick=createRoom;$('bJoin').onclick=()=>joinRoom($('joinCode').value);
+$('joinCode').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom($('joinCode').value)});
+$('bOnBack').onclick=()=>{netClose();show('menu')};$('bDcMenu').onclick=()=>{show('menu')};
+$('bCopy').onclick=async()=>{const u=$('roomLink').value;if(!u)return;try{if(navigator.share&&matchMedia('(pointer:coarse)').matches)await navigator.share({title:'Portal Pong',text:'Play Portal Pong with me! Room '+NET.code,url:u});else{await navigator.clipboard.writeText(u);setStatus('Link copied! Waiting for opponent…')}}catch(e){$('roomLink').select()}};
+{const q=new URLSearchParams(location.search).get('room');if(q)setTimeout(()=>joinRoom(q),50);}
+
 })();
 </script></body></html>
